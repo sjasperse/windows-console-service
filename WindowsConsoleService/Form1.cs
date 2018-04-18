@@ -9,14 +9,16 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Newtonsoft.Json;
 
 namespace WindowsConsoleService
 {
     public partial class Form1 : Form
     {
-        private readonly string configurationStoragePath;
         private readonly Logger logger;
         private readonly TabControlManager tabControlManager;
+        private IDisposable managementApi;
+        private readonly StoredStateManager storedStateManager;
 
         public Form1()
         {
@@ -25,9 +27,11 @@ namespace WindowsConsoleService
             logger = new Logger();
             tabControlManager = new TabControlManager(tabControl1, logger);
 
-            configurationStoragePath = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "config.json");
+            var configurationStoragePath =
+                Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "config.json");
+            storedStateManager = new StoredStateManager(configurationStoragePath);
         }
 
         private void Form1_Load(object sender, EventArgs e)
@@ -37,25 +41,142 @@ namespace WindowsConsoleService
 
         private void Initialize()
         {
-            logger.Info("Initializing...");
+            string defaultManagementApiBinding = "http://localhost:8080/";
 
-            logger.Info("Adding test service...");
-            tabControlManager.AddService(new ServiceModel()
+            logger.Info($"Loading configuration from {storedStateManager.Filename}...");
+            var storedModel = storedStateManager.Get();
+            if (storedModel == null)
             {
-                Name = "test",
-                DisplayName = "Test",
-                Filename = "cmd",
-                Arguments = "/C echo test"
-            });
+                logger.Info("No configuration to load.");
 
-            logger.Info("Finished initializing");
+                storedModel = new StorageModel()
+                {
+                    ManagementApi = new StorageModel.ManagementApiModel()
+                    {
+                        Binding = defaultManagementApiBinding
+                    },
+                    Services = new []
+                    {
+                        new ServiceModel()
+                        {
+                            Name = "example",
+                            DisplayName = "Example",
+                            Filename = "cmd",
+                            Arguments = "/C \"echo Hello world\""
+                        }
+                    }
+                };
+                storedStateManager.Store(storedModel);
+                logger.Info("Created example config file");
+            }
+
+            var managementApiBinding = defaultManagementApiBinding;
+            {
+                if (!string.IsNullOrEmpty(storedModel.ManagementApi?.Binding))
+                {
+                    managementApiBinding = storedModel.ManagementApi.Binding;
+                    logger.Info($"Using management API binding '{managementApiBinding}' from confgiuration");
+                }
+
+                if (storedModel.Services != null)
+                {
+                    foreach (var service in storedModel.Services)
+                    {
+                        logger.Info($"Adding service '{service.DisplayName}'...");
+                        var r = tabControlManager.AddService(service);
+                        if (!r.Success)
+                        {
+                            logger.Error($"Failed to add service.\n{string.Join("\n\t", r.FailureMessages)}");
+                        }
+                    }
+                    logger.Info($"Finished loading services from configuration");
+                }
+            }
+
+            logger.Info("Initializing Management Api...");
+            var apiFactory = new ManagementAPI.ManagementApiFactory();
+            try
+            {
+                var apiLogger = new Logger();
+                managementApi = apiFactory.Create(
+                    managementApiBinding,
+                    tabControlManager,
+                    apiLogger
+                );
+                tabControlManager.AddTab("api", "Api", apiLogger);
+
+                logger.Info($"Management Api listening on {managementApiBinding}");
+            }
+            catch (Exception ex)
+            {
+                logger.Error($"Failed to start Management Api.\n{ex}");
+            }
+
+            logger.Info("Attaching config write-back listeners...");
+            {
+                tabControlManager.OnServiceAdded += (s, e) =>
+                {
+                    try
+                    {
+                        var current = storedStateManager.Get();
+
+                        current.Services =
+                            current.Services
+                            .Union(new[] { e.Data });
+
+                        storedStateManager.Store(current);
+
+                        logger.Info("Stored config updated.");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error($"Error while updating stored config.\n{ex}");
+                    }
+                };
+
+                tabControlManager.OnServiceRemoved += (s, e) =>
+                {
+                    try
+                    { 
+                        var current = storedStateManager.Get();
+
+                        current.Services =
+                            current.Services
+                            .Where(x => x.Name != e.Data.Name)
+                            .ToArray();
+
+                        storedStateManager.Store(current);
+
+                        logger.Info("Stored config updated.");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error($"Error while updating stored config.\n{ex}");
+                    }
+
+                };
+            }
+
+            logger.Info("Ready");
         }
     }
 
-    class TabControlManager
+    public interface IServiceManager
+    {
+        IEnumerable<ServiceModel> GetServices();
+        Result AddService(ServiceModel service);
+        Result RemoveService(string serviceName);
+        Result StopService(string serviceName);
+        Result StartService(string serviceName);
+    }
+
+    class TabControlManager : IServiceManager
     {
         private readonly TabControl tabControl;
         private readonly Logger mainLogger;
+
+        public event EventHandler<EventArgs<ServiceModel>> OnServiceAdded;
+        public event EventHandler<EventArgs<ServiceModel>> OnServiceRemoved;
 
         public TabControlManager(TabControl tabControl, Logger logger)
         {
@@ -85,10 +206,21 @@ namespace WindowsConsoleService
                 serviceExecutionModel
             );
 
-            tabControl.TabPages.Add(tab);
+            ModifyUI(() =>
+            {
+                tabControl.TabPages.Add(tab);
+            });
 
             serviceExecutionModel.Start();
 
+            try
+            {
+                OnServiceAdded?.Invoke(this, new EventArgs<ServiceModel>(service));
+            }
+            catch (Exception ex)
+            {
+                mainLogger.Error(ex.ToString());
+            }
             return Result.Successful();
         }
         public Result RemoveService(string serviceName)
@@ -102,6 +234,14 @@ namespace WindowsConsoleService
             tab.Dispose();
             serviceExecutionModel.Dispose();
 
+            try
+            {
+                OnServiceRemoved?.Invoke(this, new EventArgs<ServiceModel>(serviceExecutionModel.Source));
+            }
+            catch (Exception ex)
+            {
+                mainLogger.Error(ex.ToString());
+            }
             return Result.Successful();
         }
         public Result StopService(string serviceName)
@@ -129,6 +269,20 @@ namespace WindowsConsoleService
             if (model.IsRunning) return Result.Fail($"Service named '{serviceName}' is already running");
 
             model.Start();
+
+            return Result.Successful();
+        }
+        public IEnumerable<ServiceModel> GetServices()
+        {
+            return
+                GetServiceTabPages()
+                .Select(x => GetModel(x).Source)
+                .ToArray();
+        }
+        public Result AddTab(string name, string displayName, Logger logger)
+        {
+            var tab = CreateTab(name, displayName, logger);
+            tabControl.TabPages.Add(tab);
 
             return Result.Successful();
         }
@@ -166,8 +320,11 @@ namespace WindowsConsoleService
                 Dock = DockStyle.Fill,
                 ReadOnly = true,
                 WordWrap = false,
-                ScrollBars = RichTextBoxScrollBars.Both
+                ScrollBars = RichTextBoxScrollBars.Both,
+                DetectUrls = true
             };
+            richTextBox.LinkClicked += (s, e) => { Process.Start(e.LinkText); };
+
             logger.OnMessage += (s, e) =>
             {
                 var color = richTextBox.ForeColor;
@@ -186,24 +343,27 @@ namespace WindowsConsoleService
                         break;
                 }
 
-                Action addText = () =>
+                ModifyUI(() =>
                 {
                     richTextBox.Select(richTextBox.TextLength, 0);
                     richTextBox.SelectionColor = color;
                     richTextBox.SelectedText = $"{e.Message}\n";
-                };
-                if (!richTextBox.InvokeRequired)
-                {
-                    addText();
-                }
-                else
-                {
-                    richTextBox.Invoke(addText);
-                }
+                });
             };
 
             tabPage.Controls.Add(richTextBox);
             return tabPage;
+        }
+        private void ModifyUI(Action modify)
+        {
+            if (tabControl.InvokeRequired)
+            {
+                tabControl.Invoke(modify);
+            }
+            else
+            {
+                modify();
+            }
         }
 
         class ServiceExecutionModel : IDisposable
@@ -214,6 +374,7 @@ namespace WindowsConsoleService
                 ServiceModel service
             )
             {
+                Source = service;
                 Name = service.Name;
                 Filename = service.Filename;
                 Arguments = service.Arguments;
@@ -221,6 +382,7 @@ namespace WindowsConsoleService
                 Logger = new Logger();
             }
 
+            public ServiceModel Source { get; }
             public string Name { get; }
             public string Filename { get; }
             public string Arguments { get; }
@@ -244,10 +406,10 @@ namespace WindowsConsoleService
                 process = new Process() { StartInfo = startInfo };
                 process.ErrorDataReceived += (s, e) => Logger.Error(e.Data);
                 process.OutputDataReceived += (s, e) => Logger.Info(e.Data);
-                process.Exited += (s, e) => Logger.Info("Exited");
                 process.Start();
                 process.BeginErrorReadLine();
                 process.BeginOutputReadLine();
+                process.Exited += (s, e) => Logger.Info("Exited");
 
             }
 
@@ -263,6 +425,50 @@ namespace WindowsConsoleService
             {
                 process?.Dispose();
             }
+        }
+    }
+
+    public class EventArgs<TData> : EventArgs
+    {
+        public EventArgs(
+            TData data
+            )
+        {
+            Data = data;
+        }
+
+        public TData Data { get; }
+    }
+
+    class StoredStateManager
+    {
+        private readonly string filename;
+        private readonly JsonSerializerSettings serializerSettings;
+
+        public StoredStateManager(string filename)
+        {
+            this.filename = filename;
+            this.serializerSettings = new JsonSerializerSettings()
+            {
+                Formatting = Formatting.Indented
+            };
+        }
+
+        public string Filename { get => filename; }
+
+        public StorageModel Get()
+        {
+            if (File.Exists(filename))
+            {
+                var contents = File.ReadAllText(filename);
+                return JsonConvert.DeserializeObject<StorageModel>(contents, serializerSettings);
+            }
+
+            return null;
+        }
+        public void Store(StorageModel storageModel)
+        {
+            File.WriteAllText(filename, JsonConvert.SerializeObject(storageModel, serializerSettings));
         }
     }
 }
