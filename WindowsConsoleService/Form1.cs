@@ -168,6 +168,7 @@ namespace WindowsConsoleService
         Result RemoveService(string serviceName);
         Result StopService(string serviceName);
         Result StartService(string serviceName);
+        Result<bool> GetIsRunning(string serviceName);
     }
 
     class TabControlManager : IServiceManager
@@ -285,6 +286,17 @@ namespace WindowsConsoleService
             tabControl.TabPages.Add(tab);
 
             return Result.Successful();
+        }
+        public Result<bool> GetIsRunning(string serviceName)
+        {
+            var tab = GetTabByName(serviceName);
+
+            if (tab == null) return Result.Fail<bool>($"Service named '{serviceName}' not found");
+
+            var model = GetModel(tab);
+            if (model == null) throw new Exception($"The model for tab '{serviceName}' is null");
+
+            return Result.Successful(model.IsRunning);
         }
 
         private IEnumerable<TabPage> GetServiceTabPages()

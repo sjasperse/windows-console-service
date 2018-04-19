@@ -70,6 +70,25 @@ namespace WindowsConsoleService.ManagementAPI
             return serviceManager.StopService(serviceName).ToActionResult(this);
         }
 
+        [Route("services/{serviceName}/status")]
+        [HttpGet]
+        public IHttpActionResult GetStatus(string serviceName)
+        {
+            var r = serviceManager.GetIsRunning(serviceName);
+
+            if (!r.Success)
+            {
+                return this.Ok(r);
+            }
+
+            return this.Ok(new
+            {
+                Success = r.Success,
+                Status = r.Data ? "Running" : "Stopped",
+                Running = r.Data
+            });
+        }
+
         [Route("")]
         [HttpGet]
         public IHttpActionResult Help()
