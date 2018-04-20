@@ -23,6 +23,7 @@ namespace WindowsConsoleService
         public Form1()
         {
             InitializeComponent();
+            this.Disposed += Form1_Disposed;
 
             logger = new Logger();
             tabControlManager = new TabControlManager(tabControl1, logger);
@@ -37,6 +38,11 @@ namespace WindowsConsoleService
         private void Form1_Load(object sender, EventArgs e)
         {
             Initialize();
+        }
+        private void Form1_Disposed(object sender, EventArgs e)
+        {
+            tabControlManager.Dispose();
+            managementApi.Dispose();
         }
 
         private void Initialize()
@@ -62,7 +68,7 @@ namespace WindowsConsoleService
                             Name = "example",
                             DisplayName = "Example",
                             Filename = "cmd",
-                            Arguments = "/C \"echo Hello world\""
+                            Arguments = "/C \"echo Hello world && pause\""
                         }
                     }
                 };
@@ -171,7 +177,7 @@ namespace WindowsConsoleService
         Result<bool> GetIsRunning(string serviceName);
     }
 
-    class TabControlManager : IServiceManager
+    class TabControlManager : IServiceManager, IDisposable
     {
         private readonly TabControl tabControl;
         private readonly Logger mainLogger;
@@ -368,6 +374,8 @@ namespace WindowsConsoleService
         }
         private void ModifyUI(Action modify)
         {
+            if (tabControl.IsDisposed) return;
+
             if (tabControl.InvokeRequired)
             {
                 tabControl.Invoke(modify);
@@ -375,6 +383,15 @@ namespace WindowsConsoleService
             else
             {
                 modify();
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var tab in GetServiceTabPages())
+            {
+                var model = GetModel(tab);
+                model.Dispose();
             }
         }
 
@@ -430,13 +447,33 @@ namespace WindowsConsoleService
                 if (!IsRunning) throw new Exception("Already stopped");
 
                 process.Close();
+                process.Dispose();
                 process = null;
+            }
+
+            #region IDisposable Support
+            private bool isDisposed = false; // To detect redundant calls
+
+            protected virtual void Dispose(bool disposing)
+            {
+                if (!isDisposed)
+                {
+                    if (disposing)
+                    {
+                        process?.Kill();
+                        process?.Dispose();
+                    }
+
+                    isDisposed = true;
+                }
             }
 
             public void Dispose()
             {
-                process?.Dispose();
+                Dispose(true);
             }
+            #endregion
+
         }
     }
 
