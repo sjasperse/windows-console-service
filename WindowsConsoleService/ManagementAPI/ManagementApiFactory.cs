@@ -1,15 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using System.Web.Http.Dependencies;
 using System.Web.Http.ExceptionHandling;
+using LightInject;
 using Microsoft.Owin.Hosting;
 using Owin;
-using TinyIoC;
 
 namespace WindowsConsoleService.ManagementAPI
 {
@@ -25,18 +26,18 @@ namespace WindowsConsoleService.ManagementAPI
             {
                 appBuilder.Use(async (context, next) =>
                 {
+
                     await next();
 
                     logger.Debug($"API : {context.Request.Method.ToUpper()} {context.Request.Path} - {context.Response.StatusCode}");
                 });
 
-                var ioc = new TinyIoCContainer();
-                ioc.Register(serviceManager);
+                var ioc = new ServiceContainer();
+                ioc.RegisterInstance(serviceManager);
+                ioc.RegisterApiControllers();
 
-                var http = new HttpConfiguration()
-                {
-                    DependencyResolver = new TinyIoCDependencyResolver(ioc)
-                };
+                var http = new HttpConfiguration();
+                ioc.EnableWebApi(http);
 
                 // not sure why I have to add it here instead of into the IoC
                 http.Services.Add(typeof(System.Web.Http.ExceptionHandling.IExceptionLogger), new GlobalExceptionLogger(logger));
@@ -45,49 +46,12 @@ namespace WindowsConsoleService.ManagementAPI
                 http.EnsureInitialized();
                 http.Formatters.Remove(http.Formatters.XmlFormatter);
                 http.Formatters.OfType<System.Net.Http.Formatting.JsonMediaTypeFormatter>().First().SerializerSettings.ContractResolver = new Newtonsoft.Json.Serialization.CamelCasePropertyNamesContractResolver();
-                ioc.Register(http.Services.GetApiExplorer());
+                ioc.RegisterInstance(http.Services.GetApiExplorer());
 
                 appBuilder.UseWebApi(http);
             });
 
-
             return app;
-        }
-
-        private class TinyIoCDependencyResolver : System.Web.Http.Dependencies.IDependencyResolver
-        {
-            private readonly TinyIoCContainer container;
-
-            public TinyIoCDependencyResolver(TinyIoCContainer container)
-            {
-                this.container = container;
-            }
-
-            public IDependencyScope BeginScope()
-            {
-                return this;
-            }
-
-            public void Dispose()
-            {
-                container.Dispose();
-            }
-
-            public object GetService(Type serviceType)
-            {
-                if (container.CanResolve(serviceType))
-                    return container.Resolve(serviceType);
-
-                return null;
-            }
-
-            public IEnumerable<object> GetServices(Type serviceType)
-            {
-                if (container.CanResolve(serviceType))
-                    return container.ResolveAll(serviceType);
-
-                return Enumerable.Empty<object>();
-            }
         }
 
         private class GlobalExceptionLogger : System.Web.Http.ExceptionHandling.IExceptionLogger

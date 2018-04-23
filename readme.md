@@ -12,8 +12,6 @@ Noteworthy things that are missing
 - Authentication
 - Truncating output windows to not overflow memory
 - Persistent Logging
-- Queuing messages and having a single background worker write them all to the UI to avoid smashing the UI thread from very noisy programs.
-
 
 Home
 --------

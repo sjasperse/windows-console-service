@@ -34,12 +34,16 @@ namespace WindowsConsoleService
 
         private void AddMainTab(Logger logger)
         {
-            var tab = CreateTab("Main", "Main", logger, null, true);
+            var tab = CreateTab("Main", "Main", logger, null);
             tabControl.TabPages.Add(tab);
         }
 
         public Result AddService(ServiceModel service)
         {
+            if (string.IsNullOrEmpty(service.Name)) return Result.Fail($"The property 'Name' is required.");
+            if (string.IsNullOrEmpty(service.DisplayName)) return Result.Fail($"The property 'DisplayName' is required.");
+            if (string.IsNullOrEmpty(service.Filename)) return Result.Fail($"The property 'Filename' is required.");
+
             var tabPages = tabControl.TabPages.Cast<TabPage>();
             if (tabPages.Any(x => x.Name == service.Name)) return Result.Fail($"There is already a service registered with the name '{service.Name}'");
 
@@ -76,8 +80,11 @@ namespace WindowsConsoleService
             if (tab == null) return Result.Fail($"Service named '{serviceName}' not found");
 
             var serviceExecutionModel = GetModel(tab);
-            tabControl.TabPages.Remove(tab);
-            tab.Dispose();
+            ModifyUI(() =>
+            {
+                tabControl.TabPages.Remove(tab);
+                tab.Dispose();
+            });
             serviceExecutionModel.Dispose();
 
             try
@@ -128,7 +135,10 @@ namespace WindowsConsoleService
         public Result AddTab(string name, string displayName, Logger logger)
         {
             var tab = CreateTab(name, displayName, logger);
-            tabControl.TabPages.Add(tab);
+            ModifyUI(() =>
+            {
+                tabControl.TabPages.Add(tab);
+            });
 
             return Result.Successful();
         }
@@ -162,7 +172,7 @@ namespace WindowsConsoleService
         {
             return tabPage.Tag as ServiceExecutionModel;
         }
-        private TabPage CreateTab(string name, string displayName, Logger logger, ServiceExecutionModel serviceExecutionModel = null, bool useImmediateMessageWriting = false)
+        private TabPage CreateTab(string name, string displayName, Logger logger, ServiceExecutionModel serviceExecutionModel = null)
         {
             var tabPage = new TabPage(displayName)
             {
@@ -185,10 +195,11 @@ namespace WindowsConsoleService
 
             logger.OnMessage += (s, e) =>
             {
+                if (richTextBox.IsDisposed) return;
                 ModifyUI(() => WriteMessageToRichTextBox(richTextBox, 
                     e.Message,
                     e.Level
-                ), useImmediateMessageWriting);
+                ));
             };
 
             tabPage.Controls.Add(richTextBox);
@@ -216,18 +227,16 @@ namespace WindowsConsoleService
             richTextBox.SelectionColor = color;
             richTextBox.SelectedText = $"{message}\n";
         }
-        private void ModifyUI(Action modify, bool useImmediateMessageWriting = false)
+        private void ModifyUI(Action modify)
         {
             if (tabControl.IsDisposed) return;
+            if (!tabControl.InvokeRequired)
+            {
+                modify();
+                return;
+            }
 
-            if (!useImmediateMessageWriting)
-            {
-                waitingForUIUpdate.Enqueue(modify);
-            }
-            else
-            {
-                tabControl.Invoke(modify);
-            }
+            waitingForUIUpdate.Enqueue(modify);
         }
 
         private bool updatingUI = false;
@@ -247,7 +256,6 @@ namespace WindowsConsoleService
                     if (tabControl.IsDisposed) return;
                     tabControl.Invoke(action);
                 }
-                mainLogger.Debug($"UI Update: {stopwatch.ElapsedMilliseconds}ms");
             }
             catch (Exception ex)
             {
@@ -292,7 +300,7 @@ namespace WindowsConsoleService
             public bool IsRunning {
                 get
                 {
-                    return !(process?.HasExited ?? false);
+                    return (!process?.HasExited ?? false);
                 }
             }
 

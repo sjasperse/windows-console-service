@@ -46,28 +46,28 @@ namespace WindowsConsoleService.ManagementAPI
         [HttpPost]
         public IHttpActionResult AddService(ServiceModel service)
         {
-            return serviceManager.AddService(service).ToActionResult(this);
+            return ToActionResult(serviceManager.AddService(service));
         }
 
         [Route("services/{serviceName}")]
         [HttpDelete]
         public IHttpActionResult RemoveService(string serviceName)
         {
-            return serviceManager.RemoveService(serviceName).ToActionResult(this);
+            return ToActionResult(serviceManager.RemoveService(serviceName));
         }
 
         [Route("services/{serviceName}/start")]
         [HttpPut]
         public IHttpActionResult StartService(string serviceName)
         {
-            return serviceManager.StartService(serviceName).ToActionResult(this);
+            return ToActionResult(serviceManager.StartService(serviceName));
         }
 
         [Route("services/{serviceName}/stop")]
         [HttpPut]
         public IHttpActionResult StopService(string serviceName)
         {
-            return serviceManager.StopService(serviceName).ToActionResult(this);
+            return ToActionResult(serviceManager.StopService(serviceName));
         }
 
         [Route("services/{serviceName}/status")]
@@ -105,16 +105,10 @@ namespace WindowsConsoleService.ManagementAPI
                     .ToArray()
             );
         }
-    }
 
-    public static class ResultExtensions
-    {
-        public static IHttpActionResult ToActionResult(this Result result, ApiController controller)
+        private IHttpActionResult ToActionResult(Result result)
         {
-            if (result.Success)
-                return new System.Web.Http.Results.NegotiatedContentResult<string>(System.Net.HttpStatusCode.OK, "OK", controller);
-
-            return new System.Web.Http.Results.NegotiatedContentResult<IEnumerable<string>>(System.Net.HttpStatusCode.BadRequest, result.FailureMessages, controller);
+            return this.Ok(result);
         }
     }
 }
