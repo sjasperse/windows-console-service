@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -14,7 +15,7 @@ namespace WindowsConsoleService
     {
         private readonly TabControl tabControl;
         private readonly Logger mainLogger;
-        private readonly Queue<Action> waitingForUIUpdate;
+        private readonly ConcurrentQueue<Action> waitingForUIUpdate;
         private readonly System.Timers.Timer uiUpdateTimer;
 
         public event EventHandler<EventArgs<ServiceModel>> OnServiceAdded;
@@ -24,7 +25,7 @@ namespace WindowsConsoleService
         {
             this.tabControl = tabControl;
             this.mainLogger = logger;
-            this.waitingForUIUpdate = new Queue<Action>();
+            this.waitingForUIUpdate = new ConcurrentQueue<Action>();
             this.uiUpdateTimer = new System.Timers.Timer(1000);
             this.uiUpdateTimer.Elapsed += (s, e) => UpdateUI();
             this.uiUpdateTimer.Start();
@@ -248,11 +249,11 @@ namespace WindowsConsoleService
 
             try
             {
-                var stopwatch = Stopwatch.StartNew();
-                while (waitingForUIUpdate.Any())
-                {
-                    var action = waitingForUIUpdate.Dequeue();
+                updatingUI = true;
 
+                var stopwatch = Stopwatch.StartNew();
+                while (waitingForUIUpdate.IsEmpty && waitingForUIUpdate.TryDequeue(out var action))
+                {
                     if (tabControl.IsDisposed) return;
                     tabControl.Invoke(action);
                 }
